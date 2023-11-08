@@ -25,6 +25,7 @@ template_rule(
         "cmakedefine01 GLOO_HAVE_TRANSPORT_TCP": "define GLOO_HAVE_TRANSPORT_TCP 1",
         "cmakedefine01 GLOO_HAVE_TRANSPORT_IBVERBS": "define GLOO_HAVE_TRANSPORT_IBVERBS 0",
         "cmakedefine01 GLOO_HAVE_TRANSPORT_UV": "define GLOO_HAVE_TRANSPORT_UV 0",
+	"cmakedefine01 GLOO_HAVE_TRANSPORT_DMLUDP": "define GLOO_HAVE_TRANSPORT_DMLUDP 1",
     },
 )
 
@@ -38,6 +39,7 @@ cc_library(
             "gloo/transport/*.h",
             "gloo/transport/tcp/*.h",
             "gloo/transport/tcp/tls/*.h",
+            "gloo/transport/dmludp/*.h",		
         ],
         exclude = [
             "gloo/rendezvous/redis_store.h",
@@ -70,6 +72,7 @@ cc_library(
             "gloo/rendezvous/*.cc",
             "gloo/transport/*.cc",
             "gloo/transport/tcp/*.cc",
+            "gloo/transport/dmludp/*.cc",
         ],
         exclude = [
             "gloo/cuda*.cc",
