@@ -6,7 +6,9 @@
 
 #include <c10/util/Exception.h>
 
-#if GLOO_HAVE_TRANSPORT_TCP
+#if GLOO_HAVE_TRANSPORT_DMLUDP
+#include <gloo/transport/dmludp/device.h>
+#elif GLOO_HAVE_TRANSPORT_TCP
 #include <gloo/transport/tcp/device.h>
 #endif
 
@@ -20,8 +22,8 @@
 
 // On Linux, check that the tcp transport is available.
 #ifdef __linux__
-#if !GLOO_HAVE_TRANSPORT_TCP
-#error "Expected the tcp transport to be available on Linux."
+#if !GLOO_HAVE_TRANSPORT_TCP || !GLOO_HAVE_TRANSPORT_DMLUDP
+#error "Expected the tcp/dmludp transport to be available on Linux."
 #endif
 #endif
 
@@ -40,7 +42,31 @@ C10_DEFINE_SHARED_REGISTRY_WITHOUT_WARNING(
     const std::string& /* interface */,
     const std::string& /* hostname */);
 
-#if GLOO_HAVE_TRANSPORT_TCP
+#if GLOO_HAVE_TRANSPORT_DMLUDP
+static std::shared_ptr<::gloo::transport::Device> makeDMLUDPDevice(
+    const std::string& interfaceName,
+    const std::string& hostname) {
+  TORCH_CHECK(
+      !interfaceName.empty() || !hostname.empty(),
+      "GlooDeviceFactory::makeDMLUDPDevice(): interface or hostname "
+      "can't be empty");
+
+  ::gloo::transport::dmludp::attr attr;
+  if (!interfaceName.empty()) {
+    attr.iface = interfaceName;
+  } else {
+    attr.hostname = hostname;
+  }
+  return ::gloo::transport::dmludp::CreateDevice(attr);
+}
+
+// Registry priority is per key identifier. We register DMLUDP to `LINUX` for
+// the flexibility of other application to override by priority. Register
+// DMLUDP to `DMLUDP` for env "GLOO_DEVICE_TRANSPORT" override.
+C10_REGISTER_CREATOR(GlooDeviceRegistry, LINUX, makeDMLUDPDevice);
+C10_REGISTER_CREATOR(GlooDeviceRegistry, DMLUDP, makeDMLUDPDevice);
+
+#elif GLOO_HAVE_TRANSPORT_TCP
 static std::shared_ptr<::gloo::transport::Device> makeTCPDevice(
     const std::string& interfaceName,
     const std::string& hostname) {
