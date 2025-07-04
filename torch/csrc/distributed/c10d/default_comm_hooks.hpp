@@ -46,6 +46,8 @@ class _AllReduceBySumCommHook
 
   ~_AllReduceBySumCommHook() override = default;
 
+  size_t TopKcount = 0;
+
   c10::intrusive_ptr<c10::ivalue::Future> runHook(GradBucket& bucket) override;
 };
 

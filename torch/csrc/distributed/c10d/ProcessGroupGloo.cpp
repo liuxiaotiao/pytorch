@@ -996,20 +996,40 @@ class AsyncAllreduceWork : public ProcessGroupGloo::AsyncWork {
       const std::shared_ptr<gloo::Context>& context,
       std::vector<at::Tensor>& inputs,
       ReduceOp reduceOp,
-      uint32_t tag)
+      uint32_t tag,
+      std::optional<std::vector<uint64_t>> bmap = std::nullopt)
       : ProcessGroupGloo::AsyncWork({inputs}, "gloo:all_reduce", inputs),
         context(context),
         inputs(inputs),
         reduceOp(reduceOp),
-        tag(tag) {}
+        tag(tag),
+        bitmap(bmap){}
 
   std::shared_ptr<gloo::Context> context;
   std::vector<at::Tensor> inputs;
   const ReduceOp reduceOp;
   const uint32_t tag;
+  const std::optional<std::vector<uint64_t>> bitmap;
+
+  std::optional()
 
   void allreduce(std::vector<at::Tensor>& tensors) {
     const auto& scalarType = tensors[0].scalar_type();
+
+    // std::cout<<"allreduce:"<<tensors.size()<<std::endl;
+    // for(auto e:tensors){
+    //   std::cout << "Tensor sizes: " << e.sizes() << std::endl;
+    //   std::cout << "Tensor dim: " << e.dim() << std::endl;
+    //   std::cout << "Tensor numel: " << e.numel() << std::endl;
+    //   std::cout << "Tensor dtype: " << e.dtype() << std::endl;
+    //   std::cout << "Is CUDA: " << std::boolalpha << e.is_cuda() << std::endl;
+    //         at::Tensor mask = e > 0.5;
+    //   at::Tensor indices = at::nonzero(mask);  // 返回符合条件的索引（二维）
+
+    //   std::cout << "Large values > 0.9 at positions:\n" << indices << std::endl;
+    //   std::cout << "Values:\n" << e.index({mask}) << std::endl;
+    // }
+
     gloo::AllreduceOptions opts(context);
     opts.setReduceFunction(getFunction(scalarType, reduceOp));
     opts.setTag(tag);
@@ -1341,8 +1361,9 @@ class AsyncAllreduceCUDAWork : public AsyncAllreduceWork {
       const std::shared_ptr<gloo::Context>& context,
       std::vector<at::Tensor>& inputs,
       ReduceOp reduceOp,
-      uint32_t tag)
-      : AsyncAllreduceWork(context, inputs, reduceOp, tag) {
+      uint32_t tag, 
+      std::optional<std::vector<uint64_t>> bmap = std::nullopt)
+      : AsyncAllreduceWork(context, inputs, reduceOp, tag, std::move(bmap)) {
     initializeStreamsEvents(inputs, streams, events);
 
     // Kick off copy from CUDA tensors to pinned CPU tensors.
@@ -1446,6 +1467,11 @@ c10::intrusive_ptr<Work> ProcessGroupGloo::allreduce(
   static auto invalidArgument = [](const std::string& msg) {
     TORCH_CHECK(false, "ProcessGroupGloo::allreduce: " + msg);
   };
+
+  if (inputs.size() != 1) {
+    auto indecs = std::move(inputs.back());
+    inputs.pop_back();
+  }
 
   assertNonEmpty(invalidArgument, inputs);
   assertLayoutMatch(invalidArgument, inputs);
