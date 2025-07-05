@@ -959,11 +959,31 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
   
     const size_t totalBytes = tensor.numel() * 4;
 
+    auto roundUp = [](uint64_t x, uint64_t align) {
+      return (x + align - 1) / align * align;
+    };
+
+    auto getenv_to_size_t = [](const char* varname) -> size_t {
+        const char* env = std::getenv(varname);
+        if (!env) {
+            std::cerr << "[FATAL] Environment variable " << varname << " is not set!" << std::endl;
+            std::exit(EXIT_FAILURE);  // 退出程序
+        }
+        try {
+            return static_cast<size_t>(std::stoull(env));
+        } catch (...) {
+            std::cerr << "[FATAL] Environment variable " << varname << " value is invalid: " << env << std::endl;
+            std::exit(EXIT_FAILURE);  // 退出程序
+        }
+      };
+    
+    size_t world_size = getenv_to_size_t("WORLD");
+
     const size_t numSegments = roundUp(
         std::max(
             (totalBytes + (maxSegmentBytes - 1)) / maxSegmentBytes,
-            (size_t)8 * 2),
-        (size_t)8);
+            (size_t)world_size * 2),
+        (size_t)world_size);
 
     const size_t numSegmentsPerRank = numSegments / 8;
     const size_t super_block_size =
@@ -979,7 +999,7 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
         at::Tensor global_indices;
         if (n_elem <= 4 * basicunit) {
             // 全量保留，直接生成所有index
-            at::Tensor indices = at::arange(n_elem, view_flat.options().dtype(at::at::kLong));
+            at::Tensor indices = at::arange(n_elem, view_flat.options().dtype(at::kLong));
             global_indices = indices + static_cast<int64_t>(bucket.offsets[i]);
         } else {
             // 按百分比topk
