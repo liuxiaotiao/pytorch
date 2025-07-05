@@ -985,7 +985,6 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
             (size_t)world_size * 2),
         (size_t)world_size);
 
-    const size_t numSegmentsPerRank = numSegments / 8;
     const size_t super_block_size =
         roundUp((totalBytes + numSegments - 1) / numSegments, tensor.numel());
 
