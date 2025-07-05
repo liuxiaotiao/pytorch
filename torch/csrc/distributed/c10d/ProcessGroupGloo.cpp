@@ -1555,7 +1555,7 @@ c10::intrusive_ptr<Work> ProcessGroupGloo::allreduce(
         const uint64_t block_size = max_payload / 4;
 
         int64_t n_superblocks = (inputs[0].numel() + super_block_size - 1) / super_block_size;
-        int64_t n_blocks_per_super = (super_block_size + block_size - 1) / block_size;
+        // int64_t n_blocks_per_super = (super_block_size + block_size - 1) / block_size;
 
         std::vector<uint64_t> bitmaps(n_superblocks, 0);
         const int64_t* data_ptr = cpu_indices.data_ptr<int64_t>();
