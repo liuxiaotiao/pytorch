@@ -979,7 +979,7 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
         at::Tensor global_indices;
         if (n_elem <= 4 * basicunit) {
             // 全量保留，直接生成所有index
-            at::Tensor indices = at::arange(n_elem, view_flat.options().dtype(at::kFloat));
+            at::Tensor indices = at::arange(n_elem, view_flat.options().dtype(at::at::kLong));
             global_indices = indices + static_cast<int64_t>(bucket.offsets[i]);
         } else {
             // 按百分比topk

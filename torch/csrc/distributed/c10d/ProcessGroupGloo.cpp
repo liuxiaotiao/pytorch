@@ -1512,6 +1512,8 @@ c10::intrusive_ptr<Work> ProcessGroupGloo::allreduce(
       if (inputs.size() != 1) {
         auto indices = std::move(inputs.back());
         inputs.pop_back();
+        at::Tensor cpu_indices = indices.cpu();
+        cpu_indices = cpu_indices.contiguous();
 
         const size_t basicunit = 1024;
         const size_t max_payload = 1440;
@@ -1541,11 +1543,18 @@ c10::intrusive_ptr<Work> ProcessGroupGloo::allreduce(
         int64_t n_blocks_per_super = (super_block_size + block_size - 1) / block_size;
 
         std::vector<uint64_t> bitmaps(n_superblocks, 0);
-        for (uint64_t idx : indices) {
-            int64_t super_id = idx / super_block_size;
-            int64_t offset_in_super = idx - super_id * super_block_size;
-            int64_t block_id = offset_in_super / block_size;
-            bitmaps[super_id] |= (1ULL << block_id);
+        const int64_t* data_ptr = cpu_indices.data_ptr<int64_t>();
+        int64_t n_idx = cpu_indices.size(0);
+        for (int64_t i = 0; i < n_idx; ++i) {
+          int64_t idx = data_ptr[i];
+          int64_t super_id = idx / super_block_size;
+          int64_t offset_in_super = idx - super_id * super_block_size;
+          int64_t block_id = offset_in_super / block_size;
+          bitmaps[super_id] |= (1ULL << block_id);
+            // int64_t super_id = idx / super_block_size;
+            // int64_t offset_in_super = idx - super_id * super_block_size;
+            // int64_t block_id = offset_in_super / block_size;
+            // bitmaps[super_id] |= (1ULL << block_id);
         }
 
         work = c10::make_intrusive<AsyncAllreduceCUDAWork>(
