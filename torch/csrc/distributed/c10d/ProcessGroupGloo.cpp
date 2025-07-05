@@ -1011,8 +1011,6 @@ class AsyncAllreduceWork : public ProcessGroupGloo::AsyncWork {
   const uint32_t tag;
   const std::optional<std::vector<uint64_t>> bitmap;
 
-  std::optional()
-
   void allreduce(std::vector<at::Tensor>& tensors) {
     const auto& scalarType = tensors[0].scalar_type();
 
@@ -1034,7 +1032,12 @@ class AsyncAllreduceWork : public ProcessGroupGloo::AsyncWork {
     opts.setReduceFunction(getFunction(scalarType, reduceOp));
     opts.setTag(tag);
     GENERATE_ALL_TYPES(scalarType, setOutputs, opts, tensors);
-    gloo::allreduce(opts);
+    if (bitmap.has_value()){
+      gloo::allreduce(opts, std::move(*bitmap));
+    } else {
+      gloo::allreduce(opts);
+    }
+    
   }
 
   void run() override {
@@ -1468,11 +1471,6 @@ c10::intrusive_ptr<Work> ProcessGroupGloo::allreduce(
     TORCH_CHECK(false, "ProcessGroupGloo::allreduce: " + msg);
   };
 
-  if (inputs.size() != 1) {
-    auto indecs = std::move(inputs.back());
-    inputs.pop_back();
-  }
-
   assertNonEmpty(invalidArgument, inputs);
   assertLayoutMatch(invalidArgument, inputs);
   assertTypeAndSizesMatch(invalidArgument, inputs);
@@ -1511,8 +1509,52 @@ c10::intrusive_ptr<Work> ProcessGroupGloo::allreduce(
     }
   } else if (device.type() == at::kCUDA) {
     if (layout == c10::kStrided) {
-      work = c10::make_intrusive<AsyncAllreduceCUDAWork>(
+      if (inputs.size() != 1) {
+        auto indices = std::move(inputs.back());
+        inputs.pop_back();
+
+        const size_t basicunit = 1024;
+        const size_t max_payload = 1440;
+        const size_t maxSegmentBytes = inputs[0].numel() * 
+          std::max((size_t)1, 2 * basicunit * basicunit / 4); 
+      
+        const size_t totalBytes = inputs[0].numel() * 4;
+
+        auto roundUp = [](uint64_t x, uint64_t align) {
+          return (x + align - 1) / align * align;
+        };
+
+        const size_t numSegments = [](size_t x, size_t align) -> size_t {
+          return (x + align - 1) / align * align;
+        }(std::max(
+                (totalBytes + (maxSegmentBytes - 1)) / maxSegmentBytes,
+                (size_t)8 * 2),
+            (size_t)8);
+   
+        const size_t numSegmentsPerRank = numSegments / 8;
+        const size_t super_block_size =
+            roundUp((totalBytes + numSegments - 1) / numSegments, inputs[0].numel());
+
+        const uint64_t block_size = max_payload / 4;
+
+        int64_t n_superblocks = (inputs[0].numel() + super_block_size - 1) / super_block_size;
+        int64_t n_blocks_per_super = (super_block_size + block_size - 1) / block_size;
+
+        std::vector<uint64_t> bitmaps(n_superblocks, 0);
+        for (uint64_t idx : indices) {
+            int64_t super_id = idx / super_block_size;
+            int64_t offset_in_super = idx - super_id * super_block_size;
+            int64_t block_id = offset_in_super / block_size;
+            bitmaps[super_id] |= (1ULL << block_id);
+        }
+
+        work = c10::make_intrusive<AsyncAllreduceCUDAWork>(
+          std::move(context), inputs, opts.reduceOp, tag, std::move(bitmaps));
+      } else {
+        work = c10::make_intrusive<AsyncAllreduceCUDAWork>(
           std::move(context), inputs, opts.reduceOp, tag);
+      }
+      
     } else if (layout == c10::kSparse) {
       work = c10::make_intrusive<AsyncSparseAllreduceCUDAWork>(
           std::move(context), inputs, tag);

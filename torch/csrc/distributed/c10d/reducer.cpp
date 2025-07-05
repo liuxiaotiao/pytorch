@@ -951,45 +951,64 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
   const size_t numSegmentsPerRank = numSegments / context->size;
   const size_t segmentBytes =
       roundUp((totalBytes + numSegments - 1) / numSegments, opts.elementSize);*/
+  {
+    const size_t basicunit = 1024;
+    const size_t max_payload = 1440;
+    const size_t maxSegmentBytes = tensor.numel() * 
+      std::max((size_t)1, 2 * basicunit * basicunit / 4); 
+  
+    const size_t totalBytes = tensor.numel() * 4;
 
-  uint64_t super_block_size = 100;
-  uint64_t block_size = 360;
-  double percent = 0.1;
-  std::vector<at::Tensor> all_global_indices;
-  for (size_t i = 0; i < bucket_views_in.size(); ++i) {
-      at::Tensor view_flat = bucket_views_in[i].reshape({-1});
-      int64_t n_elem = view_flat.size(0);
-      at::Tensor global_indices;
-      if (n_elem <= 4096) {
-          // 全量保留，直接生成所有index
-          at::Tensor indices = at::arange(n_elem, view_flat.options().dtype(at::kFloat));
-          global_indices = indices + static_cast<int64_t>(offsets[i]);
-      } else {
-          // 按百分比topk
-          int64_t k = std::max<int64_t>(1, static_cast<int64_t>(std::ceil(percent * n_elem)));
-          auto topk_result = view_flat.abs().topk(k);
-          at::Tensor local_indices = std::get<1>(topk_result);
-          global_indices = local_indices + static_cast<int64_t>(offsets[i]);
-      }
-      all_global_indices.push_back(global_indices);
+    const size_t numSegments = roundUp(
+        std::max(
+            (totalBytes + (maxSegmentBytes - 1)) / maxSegmentBytes,
+            (size_t)8 * 2),
+        (size_t)8);
+
+    const size_t numSegmentsPerRank = numSegments / 8;
+    const size_t super_block_size =
+        roundUp((totalBytes + numSegments - 1) / numSegments, tensor.numel());
+
+    // uint64_t super_block_size = segmentBytes;
+    const uint64_t block_size = max_payload / 4;
+    double percent = 0.1; /* Dynamic setting */
+    std::vector<at::Tensor> all_global_indices;
+    for (size_t i = 0; i < bucket.bucket_views_in.size(); ++i) {
+        at::Tensor view_flat = bucket.bucket_views_in[i].reshape({-1});
+        int64_t n_elem = view_flat.size(0);
+        at::Tensor global_indices;
+        if (n_elem <= 4 * basicunit) {
+            // 全量保留，直接生成所有index
+            at::Tensor indices = at::arange(n_elem, view_flat.options().dtype(at::kFloat));
+            global_indices = indices + static_cast<int64_t>(bucket.offsets[i]);
+        } else {
+            // 按百分比topk
+            int64_t k = std::max<int64_t>(1, static_cast<int64_t>(std::ceil(percent * n_elem)));
+            auto topk_result = view_flat.abs().topk(k);
+            at::Tensor local_indices = std::get<1>(topk_result);
+            global_indices = local_indices + static_cast<int64_t>(bucket.offsets[i]);
+        }
+        all_global_indices.push_back(global_indices);
+    }
+
+    // 拼成一个全局 index tensor
+    at::Tensor all_indices = at::cat(all_global_indices);  // 1D CUDA tensor
+
+    // ---- blockwise 归约 ----
+    // 1. 计算属于哪个“super block”（351一组）
+    at::Tensor super_block_id = at::div(all_indices, int64_t(super_block_size), "trunc");      // [N]
+    at::Tensor offset_in_super = all_indices - super_block_id * int64_t(super_block_size);     // [N]
+    // 2. 组内分block归约到起始
+    at::Tensor block_start_in_super = at::div(offset_in_super, int64_t(block_size), "trunc") * int64_t(block_size);
+    // 3. 最终归约 index（flatten 视角）
+    at::Tensor reduced_indices = super_block_id * int64_t(super_block_size) + block_start_in_super;
+
+    // 去重、排序（保持 CUDA）
+    auto uniq_res = at::_unique(reduced_indices, /*sorted=*/true, /*return_inverse=*/false);
+    at::Tensor unique_reduced_indices = std::get<0>(uniq_res);
+    bucket.sparse_tensor_indices = std::get<0>(at::sort(unique_reduced_indices));         
   }
-
-  // 拼成一个全局 index tensor
-  at::Tensor all_indices = at::cat(all_global_indices);  // 1D CUDA tensor
-
-  // ---- blockwise 归约 ----
-  // 1. 计算属于哪个“super block”（351一组）
-  at::Tensor super_block_id = at::div(all_indices, super_block_size, "trunc");      // [N]
-  at::Tensor offset_in_super = all_indices - super_block_id * super_block_size;     // [N]
-  // 2. 组内分block归约到起始
-  at::Tensor block_start_in_super = at::div(offset_in_super, block_size, "trunc") * block_size;
-  // 3. 最终归约 index（flatten 视角）
-  at::Tensor reduced_indices = super_block_id * super_block_size + block_start_in_super;
-
-  // 去重、排序（保持 CUDA）
-  auto uniq_res = at::_unique(reduced_indices, /*sorted=*/true, /*return_inverse=*/false);
-  at::Tensor unique_reduced_indices = std::get<0>(uniq_res);
-  bucket.sparse_tensor_indices = std::get<0>(at::sort(unique_reduced_indices));
+  
 
 
   // auto k = 0.3;
