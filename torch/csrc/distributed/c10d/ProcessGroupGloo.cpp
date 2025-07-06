@@ -1512,36 +1512,41 @@ c10::intrusive_ptr<Work> ProcessGroupGloo::allreduce(
       if (inputs.size() != 1) {
         auto indices = std::move(inputs.back());
         inputs.pop_back();
-        at::Tensor cpu_indices = indices.cpu();
-        cpu_indices = cpu_indices.contiguous();
 
-        const size_t basicunit = 1024;
-        const size_t max_payload = 1440;
-        const size_t maxSegmentBytes = inputs[0].numel() * 
-          std::max((size_t)1, 2 * basicunit * basicunit / 4); 
-      
-        const size_t totalBytes = inputs[0].numel() * 4;
+        int64_t k = indices[0].item<int64_t>(); 
+        at::Tensor valid = indices.slice(0, 1, k + 1);
 
         auto roundUp = [](uint64_t x, uint64_t align) {
           return (x + align - 1) / align * align;
         };
 
         auto getenv_to_size_t = [](const char* varname) -> size_t {
-        const char* env = std::getenv(varname);
-        if (!env) {
-            std::cerr << "[FATAL] Environment variable " << varname << " is not set!" << std::endl;
-            std::exit(EXIT_FAILURE);  // 退出程序
-        }
-        try {
-            return static_cast<size_t>(std::stoull(env));
-        } catch (...) {
-            std::cerr << "[FATAL] Environment variable " << varname << " value is invalid: " << env << std::endl;
-            std::exit(EXIT_FAILURE);  // 退出程序
-        }
-      };
+          const char* env = std::getenv(varname);
+          if (!env) {
+              std::cerr << "[FATAL] Environment variable " << varname << " is not set!" << std::endl;
+              std::exit(EXIT_FAILURE);  // 退出程序
+          }
+          try {
+              return static_cast<size_t>(std::stoull(env));
+          } catch (...) {
+              std::cerr << "[FATAL] Environment variable " << varname << " value is invalid: " << env << std::endl;
+              std::exit(EXIT_FAILURE);  // 退出程序
+          }
+        };
 
+        at::Tensor cpu_indices = valid.cpu();
+        cpu_indices = cpu_indices.contiguous();
+        const size_t elementSize = 4;
+
+        const size_t basicunit = 1024;
+        const size_t max_payload = 1440;
+        auto n_elements = inputs[0].numel();
+        const size_t maxSegmentBytes = elementSize * 
+          std::max((size_t)1, 2 * basicunit * basicunit / elementSize); 
+      
+        const size_t totalBytes = n_elements * elementSize;
         size_t world_size = getenv_to_size_t("WORLD");
-
+        
         const size_t numSegments = [](size_t x, size_t align) -> size_t {
           return (x + align - 1) / align * align;
         }(std::max(
@@ -1550,27 +1555,49 @@ c10::intrusive_ptr<Work> ProcessGroupGloo::allreduce(
             world_size);
    
         const size_t super_block_size =
-            roundUp((totalBytes + numSegments - 1) / numSegments, inputs[0].numel());
+            roundUp((totalBytes + numSegments - 1) / numSegments, 4);
+         const uint64_t block_size = max_payload;
 
-        const uint64_t block_size = max_payload / 4;
+        int64_t n_blocks = (n_elements + block_size - 1) / block_size;
 
-        int64_t n_superblocks = (inputs[0].numel() + super_block_size - 1) / super_block_size;
-        // int64_t n_blocks_per_super = (super_block_size + block_size - 1) / block_size;
+        // 计算每个超级块内的 block 数
+        int64_t blocks_per_super = (super_block_size + block_size - 1) / block_size;
+        int64_t n_superblocks = numSegments;
 
-        std::vector<uint64_t> bitmaps(n_superblocks, 0);
-        const int64_t* data_ptr = cpu_indices.data_ptr<int64_t>();
+        int64_t words_per_super = (blocks_per_super + 63) / 64;
+       
+
+        // int64_t n_superblocks = (inputs[0].numel() + super_block_size - 1) / super_block_size;
+        std::vector<uint64_t> bitmaps(n_superblocks * words_per_super, 0);
+
+        const float* data_ptr = cpu_indices.data_ptr<float>();
         int64_t n_idx = cpu_indices.size(0);
+
         for (int64_t i = 0; i < n_idx; ++i) {
-          int64_t idx = data_ptr[i];
+          int64_t idx = static_cast<uint64_t>(data_ptr[i]);
+          if (idx < 0 || idx >= n_elements) continue; // 越界检查
+
           int64_t super_id = idx / super_block_size;
           int64_t offset_in_super = idx - super_id * super_block_size;
-          int64_t block_id = offset_in_super / block_size;
-          bitmaps[super_id] |= (1ULL << block_id);
-            // int64_t super_id = idx / super_block_size;
-            // int64_t offset_in_super = idx - super_id * super_block_size;
-            // int64_t block_id = offset_in_super / block_size;
-            // bitmaps[super_id] |= (1ULL << block_id);
-        }
+          int64_t block_id_in_super = offset_in_super / block_size;
+
+          int64_t word_id = block_id_in_super / 64;
+          int64_t bit_id = block_id_in_super % 64;
+
+          int64_t bitmap_offset = super_id * words_per_super + word_id;
+          bitmaps[bitmap_offset] |= (1ULL << bit_id);
+      }
+        // for (int64_t i = 0; i < n_idx; ++i) {
+        //   int64_t idx = data_ptr[i];
+        //   int64_t super_id = idx / super_block_size;
+        //   int64_t offset_in_super = idx - super_id * super_block_size;
+        //   int64_t block_id = offset_in_super / block_size;
+        //   bitmaps[super_id] |= (1ULL << block_id);
+        //     // int64_t super_id = idx / super_block_size;
+        //     // int64_t offset_in_super = idx - super_id * super_block_size;
+        //     // int64_t block_id = offset_in_super / block_size;
+        //     // bitmaps[super_id] |= (1ULL << block_id);
+        // }
 
         work = c10::make_intrusive<AsyncAllreduceCUDAWork>(
           std::move(context), inputs, opts.reduceOp, tag, std::move(bitmaps));

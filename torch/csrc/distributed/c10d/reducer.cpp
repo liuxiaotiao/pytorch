@@ -952,45 +952,48 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
   const size_t segmentBytes =
       roundUp((totalBytes + numSegments - 1) / numSegments, opts.elementSize);*/
   {
-    const size_t basicunit = 1024;
-    const size_t max_payload = 1440;
-    const size_t maxSegmentBytes = tensor.numel() * 
-      std::max((size_t)1, 2 * basicunit * basicunit / 4); 
-  
-    const size_t totalBytes = tensor.numel() * 4;
-
     auto roundUp = [](uint64_t x, uint64_t align) {
       return (x + align - 1) / align * align;
     };
 
     auto getenv_to_size_t = [](const char* varname) -> size_t {
-        const char* env = std::getenv(varname);
-        if (!env) {
-            std::cerr << "[FATAL] Environment variable " << varname << " is not set!" << std::endl;
-            std::exit(EXIT_FAILURE);  // 退出程序
-        }
-        try {
-            return static_cast<size_t>(std::stoull(env));
-        } catch (...) {
-            std::cerr << "[FATAL] Environment variable " << varname << " value is invalid: " << env << std::endl;
-            std::exit(EXIT_FAILURE);  // 退出程序
-        }
-      };
+      const char* env = std::getenv(varname);
+      if (!env) {
+          std::cerr << "[FATAL] Environment variable " << varname << " is not set!" << std::endl;
+          std::exit(EXIT_FAILURE);  
+      }
+      try {
+          return static_cast<size_t>(std::stoull(env));
+      } catch (...) {
+          std::cerr << "[FATAL] Environment variable " << varname << " value is invalid: " << env << std::endl;
+          std::exit(EXIT_FAILURE);  
+      }
+    };
+
+    const size_t basicunit = 1024;
+    const size_t max_payload = 1440;
+    const size_t elementSize = 4;
+    const size_t maxSegmentBytes = elementSize * 
+      std::max((size_t)1, 2 * basicunit * basicunit / elementSize); 
+  
+    const size_t totalBytes = tensor.numel() * elementSize;
     
+    /* Get world size */
     size_t world_size = getenv_to_size_t("WORLD");
 
+    /* */
     const size_t numSegments = roundUp(
         std::max(
             (totalBytes + (maxSegmentBytes - 1)) / maxSegmentBytes,
             (size_t)world_size * 2),
         (size_t)world_size);
 
-    const size_t super_block_size =
-        roundUp((totalBytes + numSegments - 1) / numSegments, tensor.numel());
+    const size_t superBlockBytes =
+      roundUp((totalBytes + numSegments - 1) / numSegments, elementSize);
 
-    // uint64_t super_block_size = segmentBytes;
+    const size_t superBlockSize = superBlockBytes / elementSize;
     const uint64_t block_size = max_payload / 4;
-    double percent = 0.1; /* Dynamic setting */
+    double percent = 0.01; /* Dynamic setting */
     std::vector<at::Tensor> all_global_indices;
     for (size_t i = 0; i < bucket.bucket_views_in.size(); ++i) {
         at::Tensor view_flat = bucket.bucket_views_in[i].reshape({-1});
@@ -998,7 +1001,7 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
         at::Tensor global_indices;
         if (n_elem <= 4 * basicunit) {
             // 全量保留，直接生成所有index
-            at::Tensor indices = at::arange(n_elem, view_flat.options().dtype(at::kLong));
+            at::Tensor indices = at::arange(n_elem, view_flat.options().dtype(at::kFloat));
             global_indices = indices + static_cast<int64_t>(bucket.offsets[i]);
         } else {
             // 按百分比topk
@@ -1014,21 +1017,23 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
     at::Tensor all_indices = at::cat(all_global_indices);  // 1D CUDA tensor
 
     // ---- blockwise 归约 ----
-    // 1. 计算属于哪个“super block”（351一组）
-    at::Tensor super_block_id = at::div(all_indices, int64_t(super_block_size), "trunc");      // [N]
-    at::Tensor offset_in_super = all_indices - super_block_id * int64_t(super_block_size);     // [N]
+    // 1. 计算属于哪个“super block”（superBlockSize一组）
+    at::Tensor super_block_id = at::div(all_indices, int64_t(superBlockSize), "trunc");      // [N]
+    at::Tensor offset_in_super = all_indices - super_block_id * int64_t(superBlockSize);     // [N]
     // 2. 组内分block归约到起始
     at::Tensor block_start_in_super = at::div(offset_in_super, int64_t(block_size), "trunc") * int64_t(block_size);
     // 3. 最终归约 index（flatten 视角）
-    at::Tensor reduced_indices = super_block_id * int64_t(super_block_size) + block_start_in_super;
+    at::Tensor reduced_indices = super_block_id * int64_t(superBlockSize) + block_start_in_super;
 
     // 去重、排序（保持 CUDA）
     auto uniq_res = at::_unique(reduced_indices, /*sorted=*/true, /*return_inverse=*/false);
-    at::Tensor unique_reduced_indices = std::get<0>(uniq_res);
-    bucket.sparse_tensor_indices = std::get<0>(at::sort(unique_reduced_indices));         
+    at::Tensor unique_reduced_indices = std::get<0>(at::sort(std::get<0>(uniq_res)));
+    at::Tensor buffer_tensor = at::zeros(tensor.numel(), at::TensorOptions().dtype(at::kFloat).device(at::kCUDA));
+    buffer_tensor[0] = unique_reduced_indices.numel();
+    buffer_tensor.slice(0, 1, unique_reduced_indices.numel() + 1).copy_(unique_reduced_indices);
+    bucket.sparse_tensor_indices = buffer_tensor;         
   }
   
-
 
   // auto k = 0.3;
   // std::vector<at::Tensor> all_global_indices;
