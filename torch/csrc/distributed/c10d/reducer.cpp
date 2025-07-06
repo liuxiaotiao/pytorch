@@ -951,7 +951,7 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
   const size_t numSegmentsPerRank = numSegments / context->size;
   const size_t segmentBytes =
       roundUp((totalBytes + numSegments - 1) / numSegments, opts.elementSize);*/
-  {
+  if (topCount == std::numeric_limits<size_t>::max() || (topCount / 5) % topThreshold == 0){
     auto roundUp = [](uint64_t x, uint64_t align) {
       return (x + align - 1) / align * align;
     };
@@ -1032,6 +1032,12 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
     buffer_tensor[0] = unique_reduced_indices.numel();
     buffer_tensor.slice(0, 1, unique_reduced_indices.numel() + 1).copy_(unique_reduced_indices);
     bucket.sparse_tensor_indices = buffer_tensor;         
+  }
+
+  ++topCount;
+  if (topCount == 10 * topThreshold + 5) {
+    topCount = 5;
+    topThreshold *= 2;
   }
   
 

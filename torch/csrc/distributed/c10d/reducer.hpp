@@ -505,6 +505,10 @@ class TORCH_API Reducer {
   void set_divide_factor();
   // kick off all reduce for the ready bucket
   void all_reduce_bucket(Bucket& bucket);
+
+  size_t topCount = std::numeric_limits<size_t>::max();
+
+  size_t topThreshold = 32;
   // kick off all reduce to local used map, it can help find global unused
   // parameters
   void all_reduce_local_used_map();
