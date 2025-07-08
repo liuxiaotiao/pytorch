@@ -994,7 +994,7 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
 
     const size_t superBlockSize = superBlockBytes / elementSize;
     const uint64_t block_size = max_payload / 4;
-    double percent = 0.01; /* Dynamic setting */
+    double percent = 0.1; /* Dynamic setting */
     std::vector<at::Tensor> all_global_indices;
     for (size_t i = 0; i < bucket.bucket_views_in.size(); ++i) {
         at::Tensor view_flat = bucket.bucket_views_in[i].reshape({-1});
