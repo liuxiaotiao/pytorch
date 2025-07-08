@@ -951,7 +951,8 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
   const size_t numSegmentsPerRank = numSegments / context->size;
   const size_t segmentBytes =
       roundUp((totalBytes + numSegments - 1) / numSegments, opts.elementSize);*/
-  if (topCount == std::numeric_limits<size_t>::max() || (topCount / 5) % topThreshold == 0){
+      /*vgg16 count == 6*/
+  if (topCount == std::numeric_limits<size_t>::max() || (topCount / 6) % topThreshold == 0){
     auto roundUp = [](uint64_t x, uint64_t align) {
       return (x + align - 1) / align * align;
     };
@@ -1035,10 +1036,10 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
   }
 
   ++topCount;
-  if (topCount == 10 * topThreshold + 5) {
-    topCount = 5;
-    topThreshold *= 2;
-  }
+  // if (topCount == 10 * topThreshold + 6) {
+  //   topCount = 6;
+  //   topThreshold *= 2;
+  // }
   
 
   // auto k = 0.3;

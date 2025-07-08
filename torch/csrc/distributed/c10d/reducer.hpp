@@ -508,7 +508,7 @@ class TORCH_API Reducer {
 
   size_t topCount = std::numeric_limits<size_t>::max();
 
-  size_t topThreshold = 32;
+  size_t topThreshold = 16;
   // kick off all reduce to local used map, it can help find global unused
   // parameters
   void all_reduce_local_used_map();
