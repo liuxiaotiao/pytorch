@@ -952,7 +952,25 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
   const size_t segmentBytes =
       roundUp((totalBytes + numSegments - 1) / numSegments, opts.elementSize);*/
       /*vgg16 count == 6*/
-  if (topCount == std::numeric_limits<size_t>::max() || (topCount / 6) % topThreshold == 0){
+
+  /*
+  Dynamic
+  */
+  // bool calculateTopK = (topCount / 6) % topThreshold == 0;
+  const double K = 0.04;
+  bool calculateTopK = false;
+  double decay = 0.5;
+  double k_value = K;
+  if (((topCount / 6) % topThreshold)== 0) {
+    calculateTopK = true;
+    if ((topCount / 6) <= 750 || (topCount / 6) >= 3250) {
+      k_value = K - decay * K;
+    } else {
+      k_value = K + decay * K;
+    }
+  }
+
+  if (topCount == std::numeric_limits<size_t>::max() || calculateTopK){
     auto roundUp = [](uint64_t x, uint64_t align) {
       return (x + align - 1) / align * align;
     };
@@ -994,7 +1012,7 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
 
     const size_t superBlockSize = superBlockBytes / elementSize;
     const uint64_t block_size = max_payload / 4;
-    double percent = 0.1; /* Dynamic setting */
+    double percent = k_value; /* Dynamic setting */
     std::vector<at::Tensor> all_global_indices;
     for (size_t i = 0; i < bucket.bucket_views_in.size(); ++i) {
         at::Tensor view_flat = bucket.bucket_views_in[i].reshape({-1});
