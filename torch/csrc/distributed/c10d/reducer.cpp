@@ -956,19 +956,19 @@ void Reducer::all_reduce_bucket(Bucket& bucket) {
   /*
   Dynamic
   */
-  // bool calculateTopK = (topCount / 6) % topThreshold == 0;
-  const double K = 0.04;
-  bool calculateTopK = false;
+  bool calculateTopK = (topCount / 6) % topThreshold == 0;
+  const double K = 0.01;
+  // bool calculateTopK = false;
   double decay = 0.5;
   double k_value = K;
-  if (((topCount / 6) % topThreshold)== 0) {
-    calculateTopK = true;
-    if ((topCount / 6) <= 750 || (topCount / 6) >= 3250) {
-      k_value = K - decay * K;
-    } else {
-      k_value = K + decay * K;
-    }
-  }
+  // if (((topCount / 6) % topThreshold)== 0) {
+  //   calculateTopK = true;
+  //   if ((topCount / 6) <= 750 || (topCount / 6) >= 3250) {
+  //     k_value = K - decay * K;
+  //   } else {
+  //     k_value = K + decay * K;
+  //   }
+  // }
 
   if (topCount == std::numeric_limits<size_t>::max() || calculateTopK){
     auto roundUp = [](uint64_t x, uint64_t align) {
